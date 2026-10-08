@@ -1,0 +1,31 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: teacher-portal-api
+  datasource:
+    # Override with env vars in any real environment.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/teacherportal}
+    username: ${DB_USER:tlp_app}
+    password: ${DB_PASSWORD:devpass}
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+  jackson:
+    default-property-inclusion: non_null
+
+portal:
+  # Where the UI runs. Only these origins may call the API.
+  cors-origins: ${CORS_ORIGINS:http://localhost:5173,http://localhost:4173}
+  session-hours: 8
+  # Azure content. Left blank locally — the UI serves demo content until these
+  # are set, and the SAS endpoint reports that it is not configured.
+  azure:
+    blob-base-url: ${AZURE_BLOB_BASE_URL:}
+    container: ${AZURE_CONTAINER:lesson-content}
+    sas-ttl-seconds: 300
+
+logging:
+  level:
+    edu.lumen.portal: INFO
