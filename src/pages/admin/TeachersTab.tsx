@@ -62,8 +62,7 @@ export function TeachersTab() {
   };
 
   const resetPassword = async (user: User) => {
-    const temp = generateTempPassword();
-    await directory.resetPassword(user.id, temp);
+    const temp = await directory.resetPassword(user.id, generateTempPassword());
     if (session) log(session.user.id, 'admin', `Issued a new temporary password for ${user.fullName}`);
     setIssued({ name: user.fullName, password: temp });
   };
@@ -222,11 +221,14 @@ function CreateTeacherDialog({
 
     setBusy(true);
     try {
-      const user = await directory.createUser({ employeeId, fullName, email, title, role, temporaryPassword: password });
+      const { user, temporaryPassword } = await directory.createUser({ employeeId, fullName, email, title, role, temporaryPassword: password });
       if (session) log(session.user.id, 'admin', `Created the account ${user.employeeId} for ${user.fullName}`);
-      onIssued({ name: user.fullName, password });
+      // In live mode the server generates the password, so show what it issued.
+      onIssued({ name: user.fullName, password: temporaryPassword });
       reset();
       onClose();
+    } catch (err) {
+      setErrors([err instanceof Error ? err.message : 'Could not create the account.']);
     } finally {
       setBusy(false);
     }

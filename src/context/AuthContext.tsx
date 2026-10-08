@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { config } from '@/config/env';
-import { apiPost } from '@/services/http';
+import { isLiveBackend } from '@/config/env';
+import { portalApi } from '@/services/api/portalApi';
 import { secureStore } from '@/services/secureStore';
 import { clearAccessToken, setAccessToken } from '@/services/tokenStore';
 import { verifyPassword } from '@/services/password';
@@ -45,8 +45,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!directory.ready) return;
     let alive = true;
     (async () => {
-      const stored = await secureStore.get<Session | null>(SESSION_KEY, null);
+      const stored = await secureStore.get<(Session & { token?: string }) | null>(SESSION_KEY, null);
       if (!alive) return;
+      if (isLiveBackend && stored?.token && new Date(stored.expiresAt).getTime() > Date.now()) {
+        // Put the token back in memory, then let the server confirm it is still
+        // valid — a revoked or expired session fails here, not later.
+        const remaining = Math.floor((new Date(stored.expiresAt).getTime() - Date.now()) / 1000);
+        setAccessToken(stored.token, remaining);
+        try {
+          const user = await portalApi.me();
+          setSession({ user, issuedAt: stored.issuedAt, expiresAt: stored.expiresAt });
+          await directory.refresh();
+        } catch {
+          clearAccessToken();
+          await secureStore.remove(SESSION_KEY);
+        }
+        setRestoring(false);
+        return;
+      }
       if (stored && new Date(stored.expiresAt).getTime() > Date.now()) {
         // Re-read the user so a role change or deactivation takes effect at once.
         const current = directory.getUser(stored.user.id);
@@ -68,6 +84,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [directory.ready]);
 
   const signOut = useCallback(async (reason: 'user' | 'idle' = 'user') => {
+    // Revoke the session server-side so the token is dead immediately.
+    if (isLiveBackend) {
+      try {
+        await portalApi.logout();
+      } catch {
+        /* signing out locally still matters if the call fails */
+      }
+    }
     clearAccessToken();
     await secureStore.remove(SESSION_KEY);
     // Personal annotations and bookmarks are cleared too, so a shared device
@@ -80,10 +104,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(
     async (identifier: string, password: string) => {
-      if (config.apiBaseUrl) {
-        const res = await apiPost<{ accessToken: string; expiresIn: number; user: User }>('/auth/login', {
-          body: { identifier, password },
-        });
+      if (isLiveBackend) {
+        const res = await portalApi.login(identifier, password);
         setAccessToken(res.accessToken, res.expiresIn);
         const now = new Date();
         const next: Session = {
@@ -91,8 +113,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           issuedAt: now.toISOString(),
           expiresAt: new Date(now.getTime() + res.expiresIn * 1000).toISOString(),
         };
-        await secureStore.set(SESSION_KEY, next);
+        // The token is held in memory only; this descriptor carries no secret.
+        await secureStore.set(SESSION_KEY, { ...next, token: res.accessToken });
         setSession(next);
+        await directory.refresh();
         return;
       }
 
@@ -125,8 +149,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const changePassword = useCallback(
     async (current: string, next: string) => {
       if (!session) throw new Error('Not signed in.');
-      if (config.apiBaseUrl) {
-        await apiPost('/auth/change-password', { body: { current, next } });
+      if (isLiveBackend) {
+        await portalApi.changePassword(current, next);
       } else {
         const credential = directory.credentialFor(session.user.id);
         if (!credential || !(await verifyPassword(current, credential.passwordHash))) {

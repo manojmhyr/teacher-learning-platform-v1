@@ -59,6 +59,15 @@ export const config: AppConfig = {
 export const isDemoContent = config.contentSource === 'mock';
 
 /**
+ * True when a backend is configured.
+ *
+ * With it set, accounts, assignments, lessons and teaching records all come
+ * from the API. Without it, the app runs entirely on demo data, which keeps
+ * the offline sales demo working.
+ */
+export const isLiveBackend = config.apiBaseUrl !== '';
+
+/**
  * Validates the Azure configuration up front so a half-configured deployment
  * fails loudly at startup instead of silently showing empty lesson plans.
  */

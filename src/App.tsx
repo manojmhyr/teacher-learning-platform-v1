@@ -121,10 +121,10 @@ function RouteBoundary({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <DirectoryProvider>
-      <PlatformProvider>
-        <Themed>
-          <ToastProvider>
-            <AuthProvider>
+      <AuthProvider>
+        <PlatformProvider>
+          <Themed>
+            <ToastProvider>
               <SecurityProvider>
               <Router>
                 <ScrollToTop />
@@ -163,10 +163,10 @@ export default function App() {
                 </RouteBoundary>
               </Router>
               </SecurityProvider>
-            </AuthProvider>
-          </ToastProvider>
-        </Themed>
-      </PlatformProvider>
+            </ToastProvider>
+          </Themed>
+        </PlatformProvider>
+      </AuthProvider>
     </DirectoryProvider>
   );
 }

@@ -12,10 +12,29 @@ Android apps via Capacitor.
 
 ## Quick start
 
+### Demo mode — no backend, no database
+
 ```bash
 npm install
 npm run dev            # http://localhost:5173
 ```
+
+Everything runs on built-in data. Ideal for client demos, and what the
+automated smoke test uses.
+
+### Full stack — UI + API + PostgreSQL
+
+Run the [teacher-portal-api](../teacher-portal-api) service first, then:
+
+```bash
+cp .env.local.example .env.local      # sets VITE_API_BASE_URL
+npm run dev
+```
+
+Sign in with the bootstrap admin (`A1001` / `ChangeMe!2026`) and you will be
+asked to set a new password. Accounts, assignments, lessons and teaching
+records now live in PostgreSQL; lesson *content* stays on demo data until
+Azure is configured.
 
 Two demo accounts:
 

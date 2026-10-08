@@ -2,6 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { seedActivities, seedRecords } from '@/data/seed';
 import { secureStore } from '@/services/secureStore';
 import { useDirectory } from '@/context/DirectoryContext';
+import { isLiveBackend } from '@/config/env';
+import { auditToActivity, portalApi } from '@/services/api/portalApi';
+import { useAuth } from '@/context/AuthContext';
 import type { Activity, ActivityKind, Annotation, TeachingRecord } from '@/types';
 import { uid } from '@/utils/format';
 
@@ -32,6 +35,7 @@ const PlatformContext = createContext<PlatformValue | null>(null);
 
 export function PlatformProvider({ children }: { children: ReactNode }) {
   const directory = useDirectory();
+  const { session, isAdmin } = useAuth();
   const [records, setRecords] = useState<TeachingRecord[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -40,7 +44,35 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!directory.ready) return;
+    void secureStore.get<ColorPref>('theme', 'system').then(setColorPrefState);
+  }, []);
+
+  // Live mode: records and the audit trail come from the API, re-read whenever
+  // the signed-in user changes.
+  useEffect(() => {
+    if (!isLiveBackend || !session) return;
+    let alive = true;
+    (async () => {
+      try {
+        const [recs, audit] = await Promise.all([
+          isAdmin ? portalApi.admin.allRecords() : portalApi.myRecords(),
+          isAdmin ? portalApi.admin.audit() : portalApi.myActivity(),
+        ]);
+        if (!alive) return;
+        setRecords(recs ?? []);
+        setActivities(auditToActivity(audit ?? []));
+      } catch {
+        /* the pages show their own empty states */
+      }
+      if (alive) setReady(true);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [session, isAdmin]);
+
+  useEffect(() => {
+    if (!directory.ready || isLiveBackend) return;
     let alive = true;
     (async () => {
       const [storedRecords, storedActivities, storedAnnotations, storedBookmarks, storedTheme] = await Promise.all([
@@ -65,10 +97,10 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   }, [directory.ready]);
 
   useEffect(() => {
-    if (ready) void secureStore.set('records', records);
+    if (ready && !isLiveBackend) void secureStore.set('records', records);
   }, [records, ready]);
   useEffect(() => {
-    if (ready) void secureStore.set('activities', activities);
+    if (ready && !isLiveBackend) void secureStore.set('activities', activities);
   }, [activities, ready]);
   useEffect(() => {
     if (ready) void secureStore.set('annotations', annotations);
@@ -83,6 +115,8 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   const addRecord = useCallback((record: TeachingRecord) => {
     setRecords((prev) => [record, ...prev]);
   }, []);
+
+  /** Theme is the one preference kept locally in both modes. */
 
   const log = useCallback((userId: string, kind: ActivityKind, text: string) => {
     setActivities((prev) => [{ id: uid(), userId, at: new Date().toISOString(), kind, text }, ...prev].slice(0, 400));
