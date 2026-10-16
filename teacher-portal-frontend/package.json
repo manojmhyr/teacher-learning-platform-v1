@@ -1,0 +1,53 @@
+{
+  "name": "teacher-learning-platform",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Secure internal Teacher Learning Platform — one codebase for web (laptop/desktop) and native mobile apps via Capacitor.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:mobile": "vite --mode mobile --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts,.tsx",
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "cap:sync": "npm run build && cap sync",
+    "cap:add:android": "cap add android",
+    "cap:add:ios": "cap add ios",
+    "cap:android": "npm run cap:sync && cap open android",
+    "cap:ios": "npm run cap:sync && cap open ios",
+    "android:dev": "vite build --mode mobile && cap run android --live-reload --host localhost --port 5173 --forwardPorts 5173:5173",
+    "android:devices": "cap run android --list",
+    "android:wifi-apk": "node scripts/android-wifi-apk.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
+    "@capacitor/preferences": "^8.0.0",
+    "@capacitor/privacy-screen": "^2.0.1",
+    "@emotion/react": "^11.13.3",
+    "@emotion/styled": "^11.13.0",
+    "@mui/icons-material": "^5.16.7",
+    "@mui/material": "^5.16.7",
+    "@tanstack/react-query": "^5.59.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.0.0",
+    "@types/node": "^26.6.4",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "playwright": "^1.47.2",
+    "typescript": "^5.6.2",
+    "vite": "^8.3.4"
+  }
+}

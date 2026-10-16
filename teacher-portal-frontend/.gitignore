@@ -1,0 +1,21 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+.env
+.env.local
+.env.*.local
+
+# Capacitor native projects. android/ is committed: it carries the screenshot
+# block (MainActivity FLAG_SECURE) and app settings. Its own .gitignore keeps
+# out builds, APKs, local.properties and generated web assets.
+ios/
+
+.DS_Store
+*.log
+npm-debug.log*
+.vscode/*
+!.vscode/extensions.json
+.idea/
+coverage/
+test-results/
