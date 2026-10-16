@@ -18,9 +18,15 @@ const config: CapacitorConfig = {
   server: {
     // https on Android so the webview origin is a secure context.
     androidScheme: 'https',
+    // Testing over Wi-Fi without USB debugging: `npm run android:wifi-apk`
+    // bakes the PC's dev server URL into the app. Never set for real builds.
+    ...(process.env.CAP_DEV_SERVER_URL ? { url: process.env.CAP_DEV_SERVER_URL, cleartext: true } : {}),
   },
 
   android: {
+    // Lets the server tell the app from an Android browser, which it refuses
+    // (see src/security/platformGate.ts). Must match APP_USER_AGENT_MARKER.
+    appendUserAgent: 'TeacherPortalApp',
     // Blocks the webview from being captured by other apps.
     allowMixedContent: false,
     captureInput: true,

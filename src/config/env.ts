@@ -12,7 +12,11 @@ export type ContentSource = 'mock' | 'azure';
 interface AppConfig {
   /** Which content provider serves lesson plans, videos and resources. */
   contentSource: ContentSource;
-  /** Backend base URL (Spring Boot). Empty while running on mock data. */
+  /**
+   * Backend base URL (Spring Boot). Empty while running on mock data, and also
+   * when VITE_API_BASE_URL is `/`: then calls go to the page's own origin and
+   * the Vite dev server forwards them — how a phone reaches the API in testing.
+   */
   apiBaseUrl: string;
   /** Azure Blob service base, e.g. https://acct.blob.core.windows.net */
   azureBlobBaseUrl: string;
@@ -51,7 +55,7 @@ export const config: AppConfig = {
   sasEndpoint: str(raw.VITE_SAS_ENDPOINT, '/api/content/sas'),
   sasTtlSeconds: int(raw.VITE_SAS_TTL_SECONDS, 300),
   appName: str(raw.VITE_APP_NAME, 'Teacher Portal'),
-  organisation: str(raw.VITE_ORG_NAME, 'Lumen Academy'),
+  organisation: str(raw.VITE_ORG_NAME, 'Rastriya Academy'),
   buildId: str(raw.VITE_BUILD_ID, 'dev'),
 };
 
@@ -65,7 +69,7 @@ export const isDemoContent = config.contentSource === 'mock';
  * from the API. Without it, the app runs entirely on demo data, which keeps
  * the offline sales demo working.
  */
-export const isLiveBackend = config.apiBaseUrl !== '';
+export const isLiveBackend = str(raw.VITE_API_BASE_URL, '') !== '';
 
 /**
  * Validates the Azure configuration up front so a half-configured deployment

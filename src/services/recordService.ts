@@ -1,5 +1,5 @@
-import { config } from '@/config/env';
-import { apiPost } from '@/services/http';
+import { isLiveBackend } from '@/config/env';
+import { portalApi } from '@/services/api/portalApi';
 import type { TeachingRecord } from '@/types';
 import { uid } from '@/utils/format';
 
@@ -17,11 +17,11 @@ export function buildRecord(input: Omit<TeachingRecord, 'id' | 'createdAt'>): Te
 
 /** Persists a record. Falls back to local-only in demo mode. */
 export async function saveRecord(record: TeachingRecord): Promise<TeachingRecord> {
-  if (!config.apiBaseUrl) {
+  if (!isLiveBackend) {
     await new Promise((r) => setTimeout(r, 650));
     return record;
   }
-  await apiPost('/teaching-records', { body: record, idempotencyKey: record.id });
+  await portalApi.saveRecord(record);
   return record;
 }
 

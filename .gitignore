@@ -6,8 +6,9 @@ dist-ssr/
 .env.local
 .env.*.local
 
-# Capacitor native projects — generated with `npx cap add`
-android/
+# Capacitor native projects. android/ is committed: it carries the screenshot
+# block (MainActivity FLAG_SECURE) and app settings. Its own .gitignore keeps
+# out builds, APKs, local.properties and generated web assets.
 ios/
 
 .DS_Store

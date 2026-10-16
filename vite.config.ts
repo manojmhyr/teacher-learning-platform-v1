@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL as NodeURL } from 'node:url';
 
@@ -83,24 +83,53 @@ function securityHeaders(env: Record<string, string | undefined>): Plugin {
 }
 
 export default defineConfig(({ mode }) => {
-  const env = process.env as Record<string, string | undefined>;
+  // Read .env, .env.local and .env.[mode] the same way the app bundle does — process.env
+  // alone misses them, which left the API origin out of connect-src and blocked every call.
+  const env = { ...loadEnv(mode, process.cwd(), 'VITE_'), ...process.env } as Record<string, string | undefined>;
   return {
     plugins: [react(), securityHeaders(env)],
-    resolve: { alias: { '@': fileURLToPath(new NodeURL('./src', import.meta.url)) } },
+    resolve: {
+      alias: [
+        { find: '@', replacement: fileURLToPath(new NodeURL('./src', import.meta.url)) },
+        // @mui/icons-material v5 ships CommonJS at the package root. Vite 8's
+        // Rolldown interop hands those default imports back as `{ default }`
+        // objects, which React rejects and the whole app renders blank. Point
+        // deep icon imports at the package's ESM build instead.
+        { find: /^@mui\/icons-material\/(?!esm\/)(.+)$/, replacement: '@mui/icons-material/esm/$1' },
+      ],
+    },
     build: {
       target: 'es2017',
       sourcemap: mode !== 'production',
       rollupOptions: {
         output: {
-          manualChunks: {
-            react: ['react', 'react-dom', 'react-router-dom'],
-            mui: ['@mui/material', '@mui/icons-material'],
+          // Rolldown (Vite 8) only accepts the function form of manualChunks.
+          manualChunks(id: string) {
+            if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) return 'react';
+            if (/[\\/]node_modules[\\/]@mui[\\/](material|icons-material)[\\/]/.test(id)) return 'mui';
           },
         },
       },
     },
     server: {
       port: 5173,
+      // With VITE_API_BASE_URL=/ (see .env.mobile) the app calls its own origin
+      // and these routes are forwarded to Spring Boot. A phone or emulator then
+      // needs to reach only this one address — no CORS, no mixed content.
+      proxy: Object.fromEntries(
+        ['/api', '/auth'].map((prefix) => [
+          prefix,
+          {
+            target: env.VITE_API_PROXY_TARGET || 'http://localhost:8080',
+            changeOrigin: true,
+            xfwd: true,
+            // Server-to-server from here on; the browser's Origin would trip Spring's CORS check.
+            configure: (proxy) => {
+              proxy.on('proxyReq', (req) => req.removeHeader('origin'));
+            },
+          },
+        ]),
+      ),
       headers: {
         'X-Frame-Options': 'DENY',
         'X-Content-Type-Options': 'nosniff',

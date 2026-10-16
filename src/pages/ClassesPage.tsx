@@ -11,14 +11,16 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import MeetingRoomOutlinedIcon from '@mui/icons-material/MeetingRoomOutlined';
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
-import { getClass } from '@/data/catalog';
+import { useDirectory } from '@/context/DirectoryContext';
 import { useScope, useSubjectsForClass } from '@/hooks/useScope';
 import { averageCoverage, filterLessons, lessonCoverage } from '@/services/progressService';
 import { EmptyState, PageHeader, ProgressRow, SubjectIcon } from '@/components/common';
 import { fmtDate } from '@/utils/format';
 
 export function ClassesPage() {
-  const { lessons, records, classes, subjects } = useScope();
+  const { lessons, records, classes, subjects, isAdmin, userId } = useScope();
+  const { assignmentsFor } = useDirectory();
+  const mine = userId && !isAdmin ? assignmentsFor(userId) : null;
 
   if (classes.length === 0) {
     return (
@@ -44,7 +46,10 @@ export function ClassesPage() {
           const classLessons = filterLessons(lessons, cls.id);
           const coverage = averageCoverage(records, classLessons);
           const last = records.filter((r) => r.classId === cls.id).map((r) => r.dateTaught).sort().pop();
-          const mySubjects = subjects.filter((s) => cls.subjectIds.includes(s.id) && classLessons.some((l) => l.subjectId === s.id));
+          // What this teacher is assigned for the class — shown even before any lesson is published.
+          const mySubjects = subjects.filter((s) =>
+            mine ? mine.some((a) => a.classId === cls.id && a.subjectId === s.id) : cls.subjectIds.includes(s.id),
+          );
           return (
             <Card key={cls.id} variant="outlined">
               <CardContent>
@@ -105,6 +110,7 @@ export function ClassesPage() {
 export function SubjectsPage() {
   const { classId } = useParams();
   const { lessons, records, subjects: allMine } = useScope();
+  const { getClass } = useDirectory();
   const cls = getClass(classId);
   const classSubjects = useSubjectsForClass(classId);
   const subjects = cls ? classSubjects : allMine;

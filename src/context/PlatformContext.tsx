@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { seedActivities, seedRecords } from '@/data/seed';
 import { secureStore } from '@/services/secureStore';
 import { useDirectory } from '@/context/DirectoryContext';
@@ -9,6 +9,9 @@ import type { Activity, ActivityKind, Annotation, TeachingRecord } from '@/types
 import { uid } from '@/utils/format';
 
 type ColorPref = 'light' | 'dark' | 'system';
+
+/** Live mode re-reads from the database this often while the tab is visible. */
+const LIVE_SYNC_MS = 10_000;
 
 interface PlatformValue {
   /** Every record in the system. Scope with `recordsFor` before showing them. */
@@ -29,13 +32,17 @@ interface PlatformValue {
   toggleBookmark: (id: string) => void;
   setColorPref: (pref: ColorPref) => void;
   resetDemo: () => Promise<void>;
+  /** Live mode: re-reads everything from the API now. */
+  syncNow: () => Promise<void>;
 }
 
 const PlatformContext = createContext<PlatformValue | null>(null);
 
 export function PlatformProvider({ children }: { children: ReactNode }) {
   const directory = useDirectory();
-  const { session, isAdmin } = useAuth();
+  const { session, isAdmin, refreshUser } = useAuth();
+  const userId = session?.user.id;
+  const { refresh: refreshDirectory } = directory;
   const [records, setRecords] = useState<TeachingRecord[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -47,29 +54,65 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     void secureStore.get<ColorPref>('theme', 'system').then(setColorPrefState);
   }, []);
 
-  // Live mode: records and the audit trail come from the API, re-read whenever
-  // the signed-in user changes.
+  // Live mode: records and the audit trail come from the API.
+  const loadLive = useCallback(async () => {
+    if (!isLiveBackend || !userId) return;
+    const [recs, audit] = await Promise.all([
+      isAdmin ? portalApi.admin.allRecords() : portalApi.myRecords(),
+      isAdmin ? portalApi.admin.audit() : portalApi.myActivity(),
+    ]);
+    setRecords(recs ?? []);
+    setActivities(auditToActivity(audit ?? []));
+  }, [userId, isAdmin]);
+
+  /** Re-reads the account, directory, records and activity — what other users changed shows up here. */
+  const syncNow = useCallback(async () => {
+    if (!isLiveBackend || !userId) return;
+    await refreshUser();
+    await Promise.all([refreshDirectory({ admin: isAdmin }), loadLive()]).catch(() => {
+      /* transient network failure; the next tick retries */
+    });
+  }, [userId, isAdmin, refreshUser, refreshDirectory, loadLive]);
+
+  const syncRef = useRef(syncNow);
+  syncRef.current = syncNow;
+
+  // First load for this user, then keep it current while the tab is in use.
   useEffect(() => {
-    if (!isLiveBackend || !session) return;
+    if (!isLiveBackend || !userId) return;
     let alive = true;
-    (async () => {
-      try {
-        const [recs, audit] = await Promise.all([
-          isAdmin ? portalApi.admin.allRecords() : portalApi.myRecords(),
-          isAdmin ? portalApi.admin.audit() : portalApi.myActivity(),
-        ]);
-        if (!alive) return;
-        setRecords(recs ?? []);
-        setActivities(auditToActivity(audit ?? []));
-      } catch {
+    void loadLive()
+      .catch(() => {
         /* the pages show their own empty states */
-      }
-      if (alive) setReady(true);
-    })();
+      })
+      .finally(() => {
+        if (alive) setReady(true);
+      });
+
+    // A hidden tab still heartbeats (browsers slow it to about once a minute),
+    // so the server keeps counting this device as signed in.
+    const tick = () => {
+      if (document.hidden) void refreshUser();
+      else void syncRef.current();
+    };
+    const timer = window.setInterval(tick, LIVE_SYNC_MS);
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', tick);
     return () => {
       alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', tick);
     };
-  }, [session, isAdmin]);
+  }, [userId, loadLive, refreshUser]);
+
+  // Signing out clears what the previous user could see.
+  useEffect(() => {
+    if (isLiveBackend && !userId) {
+      setRecords([]);
+      setActivities([]);
+    }
+  }, [userId]);
 
   useEffect(() => {
     if (!directory.ready || isLiveBackend) return;
@@ -114,11 +157,18 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
   const addRecord = useCallback((record: TeachingRecord) => {
     setRecords((prev) => [record, ...prev]);
+    // The server stamps and audits it; re-read so every view agrees with the database.
+    if (isLiveBackend) void syncRef.current();
   }, []);
 
   /** Theme is the one preference kept locally in both modes. */
 
   const log = useCallback((userId: string, kind: ActivityKind, text: string) => {
+    // Live mode: the server writes the audit trail itself, so pull it rather than invent a local copy.
+    if (isLiveBackend) {
+      void syncRef.current();
+      return;
+    }
     setActivities((prev) => [{ id: uid(), userId, at: new Date().toISOString(), kind, text }, ...prev].slice(0, 400));
   }, []);
 
@@ -164,8 +214,9 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       toggleBookmark,
       setColorPref,
       resetDemo,
+      syncNow,
     }),
-    [records, activities, annotations, bookmarks, colorPref, ready, recordsFor, activitiesFor, addRecord, log, addAnnotation, removeAnnotation, toggleBookmark, setColorPref, resetDemo],
+    [records, activities, annotations, bookmarks, colorPref, ready, recordsFor, activitiesFor, addRecord, log, addAnnotation, removeAnnotation, toggleBookmark, setColorPref, resetDemo, syncNow],
   );
 
   return <PlatformContext.Provider value={value}>{children}</PlatformContext.Provider>;

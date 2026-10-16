@@ -16,7 +16,7 @@ const PREFIX = 'tlp:';
  * Keys permitted in browser storage. Anything not listed is rejected on web,
  * so a future change cannot quietly start persisting protected material.
  */
-const WEB_ALLOWED = new Set(['theme', 'lastClass', 'annotations', 'bookmarks', 'pendingRecords', 'session']);
+const WEB_ALLOWED = new Set(['theme', 'lastClass', 'annotations', 'bookmarks', 'pendingRecords']);
 
 let nativePrefs: typeof import('@capacitor/preferences').Preferences | null = null;
 

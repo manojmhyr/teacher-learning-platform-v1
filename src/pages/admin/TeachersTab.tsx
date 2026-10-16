@@ -62,13 +62,24 @@ export function TeachersTab() {
   };
 
   const resetPassword = async (user: User) => {
-    const temp = await directory.resetPassword(user.id, generateTempPassword());
+    let temp: string;
+    try {
+      temp = await directory.resetPassword(user.id, generateTempPassword());
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not reset the password.', 'error');
+      return;
+    }
     if (session) log(session.user.id, 'admin', `Issued a new temporary password for ${user.fullName}`);
     setIssued({ name: user.fullName, password: temp });
   };
 
-  const toggleActive = (user: User) => {
-    directory.updateUser(user.id, { active: !user.active });
+  const toggleActive = async (user: User) => {
+    try {
+      await directory.updateUser(user.id, { active: !user.active });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not update the account.', 'error');
+      return;
+    }
     if (session) log(session.user.id, 'admin', `${user.active ? 'Deactivated' : 'Reactivated'} the account for ${user.fullName}`);
     toast(user.active ? `${user.fullName} can no longer sign in.` : `${user.fullName} can sign in again.`);
   };
@@ -131,7 +142,7 @@ export function TeachersTab() {
                           <KeyOutlinedIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Button size="small" onClick={() => toggleActive(u)} disabled={u.id === session?.user.id}>
+                      <Button size="small" onClick={() => void toggleActive(u)} disabled={u.id === session?.user.id}>
                         {u.active ? 'Deactivate' : 'Reactivate'}
                       </Button>
                     </Stack>
@@ -304,8 +315,13 @@ function AssignmentsDialog({ user, onClose }: { user: User; onClose: () => void 
   const toggle = (classId: string, subjectId: string) =>
     setPairs((prev) => (has(classId, subjectId) ? prev.filter((p) => !(p.classId === classId && p.subjectId === subjectId)) : [...prev, { classId, subjectId }]));
 
-  const save = () => {
-    directory.setAssignments(user.id, pairs);
+  const save = async () => {
+    try {
+      await directory.setAssignments(user.id, pairs);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not save assignments.', 'error');
+      return;
+    }
     if (session) log(session.user.id, 'admin', `Updated assignments for ${user.fullName} (${pairs.length} class–subject pairs)`);
     toast(`Assignments updated for ${user.fullName}.`);
     onClose();
@@ -365,7 +381,7 @@ function AssignmentsDialog({ user, onClose }: { user: User; onClose: () => void 
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={save}>
+        <Button variant="contained" onClick={() => void save()}>
           Save assignments
         </Button>
       </DialogActions>

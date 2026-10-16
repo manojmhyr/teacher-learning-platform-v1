@@ -27,7 +27,6 @@ import QuizOutlinedIcon from '@mui/icons-material/QuizOutlined';
 import SportsEsportsOutlinedIcon from '@mui/icons-material/SportsEsportsOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import type { Lesson, LessonContent, ProtectedDocument, Resource, Video } from '@/types';
-import { getClass, getSubject } from '@/data/catalog';
 import { useAuth } from '@/context/AuthContext';
 import { useDirectory } from '@/context/DirectoryContext';
 import { formatDuration, formatSize } from '@/data/demoContent';
@@ -96,8 +95,8 @@ export function LessonDetailsPage() {
 
   if (!lesson) return <Navigate to="/lessons" replace />;
 
-  const cls = getClass(lesson.classId);
-  const subject = getSubject(lesson.subjectId);
+  const cls = directory.getClass(lesson.classId);
+  const subject = directory.getSubject(lesson.subjectId);
 
   const openVideo = async (video: Video) => {
     try {

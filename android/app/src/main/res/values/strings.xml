@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Teacher Portal</string>
+    <string name="title_activity_main">Teacher Portal</string>
+    <string name="package_name">edu.lumenacademy.teacherportal</string>
+    <string name="custom_url_scheme">edu.lumenacademy.teacherportal</string>
+</resources>

@@ -20,7 +20,7 @@ import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
 import SearchIcon from '@mui/icons-material/Search';
-import { getClass, getSubject } from '@/data/catalog';
+import { useDirectory } from '@/context/DirectoryContext';
 import { useScope } from '@/hooks/useScope';
 import { filterLessons, lastTaught, lessonCoverage, lessonStatus } from '@/services/progressService';
 import { EmptyState, PageHeader, StatusChip, progressColor } from '@/components/common';
@@ -36,6 +36,7 @@ export function LessonsPage() {
   const { lessons, records, classes, subjects } = useScope();
 
   const effectiveSubject = subjectId ?? params.get('subject') ?? undefined;
+  const { getClass, getSubject } = useDirectory();
   const cls = getClass(classId);
   const subject = getSubject(effectiveSubject);
 

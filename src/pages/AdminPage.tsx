@@ -23,10 +23,10 @@ import LibraryBooksOutlinedIcon from '@mui/icons-material/LibraryBooksOutlined';
 import TrendingUpOutlinedIcon from '@mui/icons-material/TrendingUpOutlined';
 import { useDirectory } from '@/context/DirectoryContext';
 import { usePlatform } from '@/context/PlatformContext';
-import { averageCoverage, filterLessons } from '@/services/progressService';
-import { EmptyState, PageHeader, ProgressRow } from '@/components/common';
+import { EmptyState, PageHeader } from '@/components/common';
 import { TeachersTab } from '@/pages/admin/TeachersTab';
 import { LessonsTab } from '@/pages/admin/LessonsTab';
+import { ProgressTab } from '@/pages/admin/ProgressTab';
 import { ActivityList } from '@/pages/ActivityPage';
 import { fmtDate } from '@/utils/format';
 
@@ -89,7 +89,7 @@ export function AdminPage() {
 
       {TABS[tab].key === 'teachers' && <TeachersTab />}
       {TABS[tab].key === 'lessons' && <LessonsTab />}
-      {TABS[tab].key === 'progress' && <AdminProgress />}
+      {TABS[tab].key === 'progress' && <ProgressTab />}
       {TABS[tab].key === 'records' && <AdminRecords />}
       {TABS[tab].key === 'audit' && (
         <Card variant="outlined">
@@ -106,56 +106,6 @@ export function AdminPage() {
         </Card>
       )}
     </Box>
-  );
-}
-
-/** Coverage per teacher, which is what an admin actually wants to compare. */
-function AdminProgress() {
-  const directory = useDirectory();
-  const { records } = usePlatform();
-  const teachers = directory.users.filter((u) => u.role === 'TEACHER');
-
-  return (
-    <Stack spacing={2.5}>
-      {teachers.length === 0 && <EmptyState title="No teachers yet" description="Add a teacher account to see teaching progress here." />}
-      {teachers.map((t) => {
-        const assigned = directory.assignmentsFor(t.id);
-        const theirRecords = records.filter((r) => r.userId === t.id);
-        return (
-          <Card key={t.id} variant="outlined">
-            <CardContent>
-              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-                <Box>
-                  <Typography variant="h6">{t.fullName}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {t.employeeId} · {assigned.length} class–subject assignments · {theirRecords.length} records
-                  </Typography>
-                </Box>
-                {!t.active && <Chip size="small" label="Deactivated" />}
-              </Stack>
-              {assigned.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  No assignments yet.
-                </Typography>
-              ) : (
-                assigned.map((a) => {
-                  const lessons = filterLessons(directory.lessons, a.classId, a.subjectId);
-                  const subject = directory.subjects.find((s) => s.id === a.subjectId);
-                  return (
-                    <ProgressRow
-                      key={`${a.classId}-${a.subjectId}`}
-                      label={`${a.classId} · ${subject?.name ?? a.subjectId}`}
-                      value={averageCoverage(theirRecords, lessons)}
-                      caption={`${averageCoverage(theirRecords, lessons)}% of ${lessons.length} lessons`}
-                    />
-                  );
-                })
-              )}
-            </CardContent>
-          </Card>
-        );
-      })}
-    </Stack>
   );
 }
 

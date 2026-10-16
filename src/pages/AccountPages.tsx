@@ -23,13 +23,16 @@ import { useToast } from '@/context/ToastContext';
 import { useScope } from '@/hooks/useScope';
 import { contentProvider } from '@/services/content';
 import { checkPasswordStrength } from '@/services/password';
-import { config, isDemoContent } from '@/config/env';
+import { config, isDemoContent, isLiveBackend } from '@/config/env';
 import { EmptyState, PageHeader } from '@/components/common';
 import { fmtDate } from '@/utils/format';
 
 function initials(name: string) {
   return name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
 }
+
+/** Phone keyboards must not capitalise or autocorrect a password. */
+const NO_AUTOFIX = { autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false } as const;
 
 export function ProfilePage() {
   const { session } = useAuth();
@@ -155,15 +158,17 @@ export function ChangePasswordCard({ forced = false }: { forced?: boolean }) {
             value={current}
             onChange={(e) => setCurrent(e.target.value)}
             autoComplete="current-password"
+            inputProps={NO_AUTOFIX}
             fullWidth
           />
-          <TextField label="New password" type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" fullWidth />
+          <TextField label="New password" type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" inputProps={NO_AUTOFIX} fullWidth />
           <TextField
             label="Confirm new password"
             type="password"
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
             autoComplete="new-password"
+            inputProps={NO_AUTOFIX}
             fullWidth
           />
           {errors.length > 0 && (
@@ -272,7 +277,7 @@ export function SettingsPage() {
 
         <ChangePasswordCard />
 
-        {isDemoContent && isAdmin && (
+        {!isLiveBackend && isAdmin && (
           <Card variant="outlined">
             <CardContent>
               <Typography variant="h6" gutterBottom>

@@ -14,6 +14,9 @@ export interface LoginResponse {
   user: User;
 }
 
+/** The fields an admin can change on an existing lesson. */
+export type LessonEdit = Pick<Lesson, 'title' | 'description' | 'chapter' | 'durationMin' | 'difficulty' | 'topics' | 'objectives'>;
+
 export interface ReferenceResponse {
   classes: ClassRoom[];
   subjects: Subject[];
@@ -21,7 +24,9 @@ export interface ReferenceResponse {
 }
 
 export const portalApi = {
-  login: (identifier: string, password: string) => apiPost<LoginResponse>('/auth/login', { body: { identifier, password } }),
+  /** `force` signs the account out of its other device instead of refusing with SESSION_ACTIVE. */
+  login: (identifier: string, password: string, deviceId: string, force = false) =>
+    apiPost<LoginResponse>('/auth/login', { body: { identifier, password, deviceId, force } }),
   logout: () => apiPost<void>('/auth/logout', {}),
   me: () => apiGet<User>('/auth/me'),
   changePassword: (current: string, next: string) => apiPost<void>('/auth/change-password', { body: { current, next } }),
@@ -44,6 +49,8 @@ export const portalApi = {
     setAssignments: (id: string, assignments: Array<{ classId: string; subjectId: string }>) =>
       apiPost<void>(`/api/admin/teachers/${id}/assignments`, { body: { assignments } }),
     createLessons: (input: Record<string, unknown>) => apiPost<Lesson[]>('/api/admin/lessons', { body: input }),
+    /** Edits a lesson after creation; class, subject and content folder stay fixed. */
+    updateLesson: (id: string, input: LessonEdit) => apiPost<Lesson>(`/api/admin/lessons/${encodeURIComponent(id)}`, { body: input }),
     publish: (id: string, published: boolean) => apiPost<void>(`/api/admin/lessons/${id}/publish`, { body: { published } }),
     contentKeys: () => apiGet<string[]>('/api/admin/content-keys'),
     allRecords: () => apiGet<TeachingRecord[]>('/api/admin/records'),
@@ -75,6 +82,8 @@ function humanise(action: string): string {
   const map: Record<string, string> = {
     LOGIN: 'Signed in',
     LOGIN_FAILED: 'Failed sign-in attempt',
+    LOGIN_BLOCKED: 'Sign-in refused — already signed in on another device',
+    SESSION_REPLACED: 'Signed out another device to sign in here',
     LOGOUT: 'Signed out',
     PASSWORD_CHANGED: 'Changed password',
     PASSWORD_RESET: 'Issued a temporary password',
@@ -83,6 +92,7 @@ function humanise(action: string): string {
     USER_ACTIVATED: 'Reactivated an account',
     ASSIGNMENTS_UPDATED: 'Updated assignments',
     LESSON_CREATED: 'Created a lesson',
+    LESSON_UPDATED: 'Edited a lesson',
     LESSON_PUBLISHED: 'Published a lesson',
     LESSON_UNPUBLISHED: 'Unpublished a lesson',
     RECORD_SAVED: 'Saved a teaching record',

@@ -62,7 +62,7 @@ export function AppLayout() {
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up('lg'));
   const isPhone = useMediaQuery(theme.breakpoints.down('sm'));
-  const { session, signOut } = useAuth();
+  const { session, signOut, isAdmin } = useAuth();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -127,7 +127,7 @@ export function AppLayout() {
       </List>
 
       <List sx={{ px: 1.25, pb: 1 }}>
-        {BOTTOM_NAV.map((item) => (
+        {BOTTOM_NAV.filter((item) => isAdmin || item.to !== '/admin').map((item) => (
           <ListItemButton
             key={item.to}
             component={RouterLink}

@@ -3,13 +3,11 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
-import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
 import Link from '@mui/material/Link';
@@ -19,10 +17,17 @@ import Typography from '@mui/material/Typography';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
-import { useAuth } from '@/context/AuthContext';
+import { isSessionConflict, useAuth } from '@/context/AuthContext';
 import { LogoMark } from '@/components/common';
-import { config, isDemoContent } from '@/config/env';
+import { config, isLiveBackend } from '@/config/env';
 import { serif, tokens } from '@/theme/theme';
+
+/**
+ * Phone keyboards capitalise, autocorrect and append a space after a
+ * suggestion — all of which silently change a password, especially once it is
+ * shown as plain text. Credentials are typed exactly as entered.
+ */
+const NO_AUTOFIX = { autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false } as const;
 
 export function LoginPage() {
   const { session, restoring, signIn, lastSignOutReason } = useAuth();
@@ -31,7 +36,8 @@ export function LoginPage() {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
-  const [remember, setRemember] = useState(true);
+  /** Set when the account is already in use on another device. */
+  const [conflict, setConflict] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [touched, setTouched] = useState(false);
@@ -39,16 +45,18 @@ export function LoginPage() {
 
   if (session && !restoring) return <Navigate to="/" replace />;
 
-  const submit = async () => {
+  const submit = async (force = false) => {
     setTouched(true);
     if (!identifier || !password) return;
     setLoading(true);
     setError('');
+    setConflict(null);
     try {
-      await signIn(identifier, password);
+      await signIn(identifier.trim(), password, { force });
       navigate('/', { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign in failed. Please try again.');
+      if (isSessionConflict(err)) setConflict(err.message);
+      else setError(err instanceof Error ? err.message : 'Sign in failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -133,9 +141,38 @@ export function LoginPage() {
               You were signed out after a period of inactivity to keep protected content secure.
             </Alert>
           )}
+          {lastSignOutReason === 'expired' && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Your session ended — it expired, or your account was changed by an administrator. Please sign in again.
+            </Alert>
+          )}
+          {lastSignOutReason === 'replaced' && !conflict && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              You were signed out because your account signed in on another device. If that was not you, sign in and change your
+              password.
+            </Alert>
+          )}
           {error && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {error}
+            </Alert>
+          )}
+          {conflict && (
+            <Alert severity="warning" sx={{ mb: 2 }} role="alertdialog" aria-label="Already signed in elsewhere">
+              <Typography variant="body2" fontWeight={600} gutterBottom>
+                Already signed in on another device
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1.5 }}>
+                {conflict} Your account can be open on only one device at a time.
+              </Typography>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                <Button variant="contained" color="warning" size="small" disabled={loading} onClick={() => void submit(true)}>
+                  {loading ? 'Signing in…' : 'Sign out other device & sign in here'}
+                </Button>
+                <Button size="small" color="inherit" disabled={loading} onClick={() => setConflict(null)}>
+                  Cancel
+                </Button>
+              </Stack>
             </Alert>
           )}
 
@@ -146,6 +183,7 @@ export function LoginPage() {
             error={touched && !identifier}
             helperText={touched && !identifier ? 'Enter your email or employee ID.' : ' '}
             autoComplete="username"
+            inputProps={NO_AUTOFIX}
             fullWidth
           />
           <TextField
@@ -154,8 +192,15 @@ export function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             error={touched && !password}
-            helperText={touched && !password ? 'Enter your password.' : ' '}
+            helperText={
+              touched && !password
+                ? 'Enter your password.'
+                : password !== password.trim()
+                  ? 'Your password starts or ends with a space — check your keyboard did not add one.'
+                  : ' '
+            }
             autoComplete="current-password"
+            inputProps={NO_AUTOFIX}
             fullWidth
             InputProps={{
               endAdornment: (
@@ -168,17 +213,13 @@ export function LoginPage() {
             }}
           />
 
-          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-            <FormControlLabel
-              control={<Checkbox checked={remember} onChange={(e) => setRemember(e.target.checked)} />}
-              label={<Typography variant="body2">Remember me</Typography>}
-            />
+          <Stack direction="row" alignItems="center" justifyContent="flex-end" sx={{ mb: 1 }}>
             <Link component="button" type="button" variant="body2" onClick={() => setForgotOpen(true)}>
               Forgot password?
             </Link>
           </Stack>
 
-          <Button type="button" onClick={() => void submit()} variant="contained" size="large" fullWidth disabled={loading} sx={{ py: 1.4 }}>
+          <Button type="button" onClick={() => void submit()} variant="contained" size="large" fullWidth disabled={loading || Boolean(conflict)} sx={{ py: 1.4 }}>
             {loading ? 'Signing in…' : 'Sign in'}
           </Button>
 
@@ -187,7 +228,7 @@ export function LoginPage() {
             <Typography variant="caption">Secure access for authorized teaching staff only.</Typography>
           </Stack>
 
-          {isDemoContent && (
+          {!isLiveBackend && (
             <Alert severity="info" variant="outlined" sx={{ mt: 3 }}>
               <Typography variant="body2" fontWeight={600}>
                 Demo build

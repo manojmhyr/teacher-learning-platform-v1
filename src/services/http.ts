@@ -21,6 +21,10 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** Machine-readable reason from the server, e.g. SESSION_ACTIVE or SESSION_REPLACED. */
+    readonly code?: string,
+    /** The whole error body, for callers that need more than the message. */
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = 'ApiError';
@@ -34,6 +38,27 @@ function buildUrl(path: string, query?: Record<string, string>): string {
   return qs ? `${base}${base.includes('?') ? '&' : '?'}${qs}` : base;
 }
 
+/** Builds an error carrying the backend's own reason ("Employee ID or password is incorrect.") when it sent one. */
+async function toApiError(res: Response): Promise<ApiError> {
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    /* no JSON body */
+  }
+  const code = typeof body.code === 'string' ? body.code : undefined;
+  if (typeof body.message === 'string' && body.message.trim() !== '') return new ApiError(body.message, res.status, code, body);
+  const fallback =
+    res.status === 401
+      ? 'Your session has expired. Please sign in again.'
+      : res.status === 403
+        ? 'You do not have permission to do that.'
+        : res.status >= 500
+          ? 'The server ran into a problem. Please try again.'
+          : `Request failed (${res.status}).`;
+  return new ApiError(fallback, res.status, code, body);
+}
+
 async function request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
   const token = getAccessToken();
   const headers: Record<string, string> = { Accept: 'application/json' };
@@ -41,17 +66,23 @@ async function request<T>(method: string, path: string, opts: RequestOptions = {
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
 
-  const res = await fetch(buildUrl(path, opts.query), {
-    method,
-    headers,
-    cache: 'no-store',
-    credentials: 'omit',
-    signal: opts.signal,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(buildUrl(path, opts.query), {
+      method,
+      headers,
+      cache: 'no-store',
+      credentials: 'omit',
+      signal: opts.signal,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
+    throw new ApiError('Cannot reach the Teacher Portal server. Check that it is running and try again.', 0);
+  }
 
   if (!res.ok) {
-    throw new ApiError(`${method} ${path} failed with ${res.status}`, res.status);
+    throw await toApiError(res);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

@@ -31,8 +31,12 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import AddIcon from '@mui/icons-material/Add';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import CloseIcon from '@mui/icons-material/Close';
 import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import LibraryAddOutlinedIcon from '@mui/icons-material/LibraryAddOutlined';
 import SearchIcon from '@mui/icons-material/Search';
@@ -61,6 +65,7 @@ export function LessonsTab() {
   const [classFilter, setClassFilter] = useState('all');
   const [createOpen, setCreateOpen] = useState(false);
   const [uploadFor, setUploadFor] = useState<Lesson | null>(null);
+  const [editing, setEditing] = useState<Lesson | null>(null);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -70,8 +75,13 @@ export function LessonsTab() {
       .sort((a, b) => a.classId.localeCompare(b.classId) || a.title.localeCompare(b.title));
   }, [directory.lessons, query, classFilter]);
 
-  const togglePublish = (lesson: Lesson) => {
-    directory.setPublished(lesson.id, !lesson.published);
+  const togglePublish = async (lesson: Lesson) => {
+    try {
+      await directory.setPublished(lesson.id, !lesson.published);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not change the lesson. Please try again.', 'error');
+      return;
+    }
     if (session) log(session.user.id, 'admin', `${lesson.published ? 'Unpublished' : 'Published'} “${lesson.title}” for ${lesson.classId}`);
     toast(lesson.published ? 'Lesson hidden from teachers.' : 'Lesson published to assigned teachers.');
   };
@@ -117,7 +127,7 @@ export function LessonsTab() {
               <TableCell>Azure folder</TableCell>
               <TableCell align="right">Topics</TableCell>
               <TableCell align="center">Published</TableCell>
-              <TableCell align="right">Content</TableCell>
+              <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -126,7 +136,12 @@ export function LessonsTab() {
               return (
                 <TableRow key={l.id} hover>
                   <TableCell>
-                    <Typography variant="body2" fontWeight={600}>
+                    <Typography
+                      variant="body2"
+                      component="button"
+                      onClick={() => setEditing(l)}
+                      sx={{ all: 'unset', display: 'block', cursor: 'pointer', fontWeight: 600, '&:hover': { textDecoration: 'underline' } }}
+                    >
                       {l.title}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -149,9 +164,12 @@ export function LessonsTab() {
                   </TableCell>
                   <TableCell align="right">{l.topics.length}</TableCell>
                   <TableCell align="center">
-                    <Switch size="small" checked={l.published} onChange={() => togglePublish(l)} inputProps={{ 'aria-label': `Publish ${l.title}` }} />
+                    <Switch size="small" checked={l.published} onChange={() => void togglePublish(l)} inputProps={{ 'aria-label': `Publish ${l.title}` }} />
                   </TableCell>
-                  <TableCell align="right">
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                    <Button size="small" startIcon={<EditOutlinedIcon />} onClick={() => setEditing(l)}>
+                      Edit
+                    </Button>
                     <Button size="small" startIcon={<CloudUploadOutlinedIcon />} onClick={() => setUploadFor(l)}>
                       Upload
                     </Button>
@@ -170,6 +188,7 @@ export function LessonsTab() {
 
       <CreateLessonDialog open={createOpen} onClose={() => setCreateOpen(false)} />
       {uploadFor && <UploadDialog lesson={uploadFor} onClose={() => setUploadFor(null)} />}
+      {editing && <EditLessonDialog lesson={editing} onClose={() => setEditing(null)} />}
     </Box>
   );
 }
@@ -188,7 +207,9 @@ function CreateLessonDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [durationMin, setDurationMin] = useState(45);
   const [difficulty, setDifficulty] = useState<Lesson['difficulty']>('Beginner');
   const [topics, setTopics] = useState<string[]>(DEFAULT_TOPICS);
-  const [newTopic, setNewTopic] = useState('');
+  const [topicDraft, setTopicDraft] = useState('');
+  const [objectives, setObjectives] = useState<string[]>([]);
+  const [objectiveDraft, setObjectiveDraft] = useState('');
   const [scope, setScope] = useState<ContentScope>('shared');
   const [linkExisting, setLinkExisting] = useState(false);
   const [existingKey, setExistingKey] = useState<string | null>(null);
@@ -214,17 +235,23 @@ function CreateLessonDialog({ open, onClose }: { open: boolean; onClose: () => v
     setDurationMin(45);
     setDifficulty('Beginner');
     setTopics(DEFAULT_TOPICS);
+    setTopicDraft('');
+    setObjectives([]);
+    setObjectiveDraft('');
     setScope('shared');
     setLinkExisting(false);
     setExistingKey(null);
     setErrors([]);
   };
 
-  const submit = () => {
+  const submit = async () => {
+    // A topic typed into the box but not yet added still counts.
+    const finalTopics = finalList(topics, topicDraft);
+    const finalObjectives = finalList(objectives, objectiveDraft);
     const problems: string[] = [];
     if (classIds.length === 0) problems.push('Select at least one class.');
     if (!chapter.trim()) problems.push('Enter a chapter.');
-    if (topics.length === 0) problems.push('Add at least one coverage topic — this is the checklist teachers record against.');
+    if (finalTopics.length === 0) problems.push('Add at least one coverage topic — this is the checklist teachers record against.');
     if (linkExisting && !existingKey) problems.push('Choose the existing folder to link, or turn linking off.');
     for (const classId of classIds) {
       const check = validateLessonTitle(title, directory.lessons.map((l) => l.id), classId, subjectId);
@@ -233,7 +260,9 @@ function CreateLessonDialog({ open, onClose }: { open: boolean; onClose: () => v
     setErrors([...new Set(problems)]);
     if (problems.length) return;
 
-    const created = directory.createLessons({
+    let created: Lesson[];
+    try {
+      created = await directory.createLessons({
       classIds,
       subjectId,
       title,
@@ -241,12 +270,16 @@ function CreateLessonDialog({ open, onClose }: { open: boolean; onClose: () => v
       chapter,
       durationMin,
       difficulty,
-      topics,
-      objectives: [],
+      topics: finalTopics,
+      objectives: finalObjectives,
       materials: ['Lesson Plan'],
       contentScope: scope,
       linkExistingKey: linkExisting && existingKey ? existingKey : undefined,
-    });
+      });
+    } catch (err) {
+      setErrors([err instanceof Error ? err.message : 'Could not create the lesson.']);
+      return;
+    }
     if (session) log(session.user.id, 'admin', `Created “${title}” for ${created.map((l) => l.classId).join(', ')}`);
     toast(`${created.length} lesson${created.length === 1 ? '' : 's'} created. Upload content, then publish.`);
     reset();
@@ -314,45 +347,25 @@ function CreateLessonDialog({ open, onClose }: { open: boolean; onClose: () => v
 
           <Divider />
 
-          <Box>
-            <Typography variant="subtitle2" gutterBottom>
-              Coverage topics
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              The checklist teachers tick when recording what they taught. Keep them in teaching order.
-            </Typography>
-            <Stack direction="row" spacing={1} sx={{ mt: 1.5, mb: 1 }}>
-              <TextField
-                size="small"
-                placeholder="Add a topic"
-                value={newTopic}
-                onChange={(e) => setNewTopic(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newTopic.trim()) {
-                    e.preventDefault();
-                    setTopics((prev) => [...prev, newTopic.trim()]);
-                    setNewTopic('');
-                  }
-                }}
-                fullWidth
-              />
-              <Button
-                startIcon={<AddIcon />}
-                onClick={() => {
-                  if (!newTopic.trim()) return;
-                  setTopics((prev) => [...prev, newTopic.trim()]);
-                  setNewTopic('');
-                }}
-              >
-                Add
-              </Button>
-            </Stack>
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-              {topics.map((t, i) => (
-                <Chip key={`${t}-${i}`} label={`${i + 1}. ${t}`} onDelete={() => setTopics((prev) => prev.filter((_, idx) => idx !== i))} />
-              ))}
-            </Stack>
-          </Box>
+          <ListEditor
+            label="Coverage topics"
+            hint="The checklist teachers tick when recording what they taught. Keep them in teaching order."
+            placeholder="Add a topic"
+            items={topics}
+            onChange={setTopics}
+            draft={topicDraft}
+            onDraftChange={setTopicDraft}
+          />
+
+          <ListEditor
+            label="Learning objectives"
+            hint="Optional. What students should be able to do after the lesson — shown to teachers on the lesson page."
+            placeholder="Add an objective"
+            items={objectives}
+            onChange={setObjectives}
+            draft={objectiveDraft}
+            onDraftChange={setObjectiveDraft}
+          />
 
           <Divider />
 
@@ -432,8 +445,267 @@ function CreateLessonDialog({ open, onClose }: { open: boolean; onClose: () => v
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={submit} disabled={!title.trim()}>
+        <Button variant="contained" onClick={() => void submit()} disabled={!title.trim()}>
           Create lesson
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/** The list as it will be saved: blank rows and repeats dropped, a typed-but-not-added entry included. */
+function finalList(items: string[], draft: string): string[] {
+  const out: string[] = [];
+  for (const raw of [...items, draft]) {
+    const t = raw.trim();
+    if (t && !out.some((o) => o.toLowerCase() === t.toLowerCase())) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * A numbered, editable list — coverage topics or objectives. Entries can be
+ * renamed in place, reordered and removed; new ones are added with Enter or
+ * the Add button.
+ */
+function ListEditor({
+  label,
+  hint,
+  placeholder,
+  items,
+  onChange,
+  draft,
+  onDraftChange,
+}: {
+  label: string;
+  hint: string;
+  placeholder: string;
+  items: string[];
+  onChange: (items: string[]) => void;
+  draft: string;
+  onDraftChange: (value: string) => void;
+}) {
+  const add = () => {
+    const t = draft.trim();
+    if (!t) return;
+    if (!items.some((i) => i.trim().toLowerCase() === t.toLowerCase())) onChange([...items, t]);
+    onDraftChange('');
+  };
+  const move = (from: number, by: number) => {
+    const next = [...items];
+    const [item] = next.splice(from, 1);
+    next.splice(from + by, 0, item);
+    onChange(next);
+  };
+
+  return (
+    <Box>
+      <Typography variant="subtitle2" gutterBottom>
+        {label}
+      </Typography>
+      <Typography variant="caption" color="text.secondary">
+        {hint}
+      </Typography>
+      <Stack spacing={1} sx={{ mt: 1.5 }}>
+        {items.map((item, i) => (
+          <Stack key={i} direction="row" spacing={0.5} alignItems="center">
+            <Typography variant="body2" color="text.secondary" sx={{ minWidth: 24, textAlign: 'right', mr: 0.5 }}>
+              {i + 1}.
+            </Typography>
+            <TextField
+              size="small"
+              value={item}
+              onChange={(e) => onChange(items.map((x, idx) => (idx === i ? e.target.value : x)))}
+              inputProps={{ 'aria-label': `${label} ${i + 1}` }}
+              fullWidth
+            />
+            <IconButton size="small" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Move ${item} up`}>
+              <ArrowUpwardIcon fontSize="small" />
+            </IconButton>
+            <IconButton size="small" disabled={i === items.length - 1} onClick={() => move(i, 1)} aria-label={`Move ${item} down`}>
+              <ArrowDownwardIcon fontSize="small" />
+            </IconButton>
+            <IconButton size="small" onClick={() => onChange(items.filter((_, idx) => idx !== i))} aria-label={`Remove ${item}`}>
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </Stack>
+        ))}
+        <Stack direction="row" spacing={1} alignItems="flex-start">
+          <TextField
+            size="small"
+            placeholder={placeholder}
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                add();
+              }
+            }}
+            helperText={draft.trim() ? 'Press Enter or Add. It is also included when you save.' : ' '}
+            fullWidth
+          />
+          <Button startIcon={<AddIcon />} onClick={add} disabled={!draft.trim()} sx={{ mt: 0.25 }}>
+            Add
+          </Button>
+        </Stack>
+      </Stack>
+    </Box>
+  );
+}
+
+/** Edits an existing lesson. Class, subject and content folder are fixed once created. */
+function EditLessonDialog({ lesson, onClose }: { lesson: Lesson; onClose: () => void }) {
+  const directory = useDirectory();
+  const { session } = useAuth();
+  const { log } = usePlatform();
+  const { toast } = useToast();
+
+  const [title, setTitle] = useState(lesson.title);
+  const [description, setDescription] = useState(lesson.description);
+  const [chapter, setChapter] = useState(lesson.chapter);
+  const [durationMin, setDurationMin] = useState(lesson.durationMin);
+  const [difficulty, setDifficulty] = useState<Lesson['difficulty']>(lesson.difficulty);
+  const [topics, setTopics] = useState<string[]>(lesson.topics);
+  const [topicDraft, setTopicDraft] = useState('');
+  const [objectives, setObjectives] = useState<string[]>(lesson.objectives ?? []);
+  const [objectiveDraft, setObjectiveDraft] = useState('');
+  const [errors, setErrors] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const subject = directory.subjects.find((s) => s.id === lesson.subjectId);
+  const kept = finalList(topics, topicDraft).map((t) => t.toLowerCase());
+  const removedTopics = lesson.topics.filter((t) => !kept.includes(t.toLowerCase()));
+
+  const save = async () => {
+    const finalTopics = finalList(topics, topicDraft);
+    const finalObjectives = finalList(objectives, objectiveDraft);
+    const problems: string[] = [];
+    if (title.trim().length < 3) problems.push('Enter a lesson title of at least 3 characters.');
+    const clash = directory.lessons.some(
+      (l) =>
+        l.id !== lesson.id &&
+        l.classId === lesson.classId &&
+        l.subjectId === lesson.subjectId &&
+        l.title.trim().toLowerCase() === title.trim().toLowerCase(),
+    );
+    if (clash) problems.push(`Another ${lesson.classId} lesson already has this title.`);
+    if (!chapter.trim()) problems.push('Enter a chapter.');
+    if (!Number.isFinite(durationMin) || durationMin < 1 || durationMin > 240) problems.push('Enter a duration between 1 and 240 minutes.');
+    if (finalTopics.length === 0) problems.push('Add at least one coverage topic — this is the checklist teachers record against.');
+    setErrors(problems);
+    if (problems.length) return;
+
+    setSaving(true);
+    try {
+      await directory.updateLesson(lesson.id, {
+        title: title.trim(),
+        description: description.trim(),
+        chapter: chapter.trim(),
+        durationMin,
+        difficulty,
+        topics: finalTopics,
+        objectives: finalObjectives,
+      });
+    } catch (err) {
+      setErrors([err instanceof Error ? err.message : 'Could not save the lesson.']);
+      setSaving(false);
+      return;
+    }
+    if (session) log(session.user.id, 'admin', `Edited “${title.trim()}” for ${lesson.classId}`);
+    toast('Lesson updated.');
+    onClose();
+  };
+
+  return (
+    <Dialog open onClose={saving ? undefined : onClose} maxWidth="md" fullWidth>
+      <DialogTitle>Edit lesson</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2.5} sx={{ mt: 0.5 }}>
+          <Box>
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
+              <Chip size="small" label={`Class ${lesson.classId}`} />
+              <Chip size="small" label={subject?.name ?? lesson.subjectId} />
+              <Chip size="small" variant="outlined" icon={<FolderOutlinedIcon />} label={displayLocation(lesson.blobPrefix)} />
+              <Chip size="small" color={lesson.published ? 'success' : 'default'} label={lesson.published ? 'Published' : 'Draft'} />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              Class, subject and content folder are fixed once a lesson is created. To change them, create a new lesson.
+            </Typography>
+          </Box>
+
+          <TextField label="Lesson title" value={title} onChange={(e) => setTitle(e.target.value)} fullWidth helperText="Renaming does not move the content folder." />
+          <TextField label="Description" value={description} onChange={(e) => setDescription(e.target.value)} fullWidth multiline minRows={2} />
+
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            <Autocomplete
+              freeSolo
+              options={subject?.chapters ?? []}
+              inputValue={chapter}
+              onInputChange={(_, v) => setChapter(v)}
+              renderInput={(params) => <TextField {...params} label="Chapter" />}
+              sx={{ flex: 1 }}
+            />
+            <TextField
+              label="Duration (minutes)"
+              type="number"
+              value={durationMin}
+              onChange={(e) => setDurationMin(Number(e.target.value))}
+              inputProps={{ min: 1, max: 240 }}
+              sx={{ width: { sm: 180 } }}
+            />
+            <TextField select label="Difficulty" value={difficulty} onChange={(e) => setDifficulty(e.target.value as Lesson['difficulty'])} sx={{ width: { sm: 180 } }}>
+              {['Beginner', 'Intermediate', 'Advanced'].map((d) => (
+                <MenuItem key={d} value={d}>
+                  {d}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Stack>
+
+          <Divider />
+
+          <ListEditor
+            label="Coverage topics"
+            hint="The checklist teachers tick when recording what they taught. Keep them in teaching order."
+            placeholder="Add a topic"
+            items={topics}
+            onChange={setTopics}
+            draft={topicDraft}
+            onDraftChange={setTopicDraft}
+          />
+          {removedTopics.length > 0 && (
+            <Alert severity="info">
+              Removing {removedTopics.map((t) => `“${t}”`).join(', ')} changes the checklist from now on only. Teaching records already saved keep
+              the topics they were recorded with.
+            </Alert>
+          )}
+
+          <ListEditor
+            label="Learning objectives"
+            hint="Optional. What students should be able to do after the lesson — shown to teachers on the lesson page."
+            placeholder="Add an objective"
+            items={objectives}
+            onChange={setObjectives}
+            draft={objectiveDraft}
+            onDraftChange={setObjectiveDraft}
+          />
+
+          {errors.length > 0 && (
+            <Alert severity="error">
+              {errors.map((e) => (
+                <div key={e}>{e}</div>
+              ))}
+            </Alert>
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={saving}>
+          Cancel
+        </Button>
+        <Button variant="contained" onClick={() => void save()} disabled={saving || !title.trim()}>
+          {saving ? 'Saving…' : 'Save changes'}
         </Button>
       </DialogActions>
     </Dialog>

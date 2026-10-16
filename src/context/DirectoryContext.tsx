@@ -3,7 +3,7 @@ import { CLASSES, SUBJECTS, seedAssignments, seedLessons, seedUsers, TEACHER_ID,
 import { secureStore } from '@/services/secureStore';
 import { hashPassword } from '@/services/password';
 import { isLiveBackend } from '@/config/env';
-import { portalApi } from '@/services/api/portalApi';
+import { portalApi, type LessonEdit } from '@/services/api/portalApi';
 import { deriveBlobPrefix, deriveContentKey, deriveLessonId, type ContentScope } from '@/services/lessonKey';
 import type { ClassRoom, Credential, Lesson, Subject, TeacherAssignment, User } from '@/types';
 import { uid } from '@/utils/format';
@@ -56,19 +56,24 @@ interface DirectoryValue {
   assignmentsFor: (userId: string) => TeacherAssignment[];
   getUser: (id: string) => User | undefined;
   getLesson: (id: string) => Lesson | undefined;
+  /** Class and subject lookups — from the API in live mode, so new rows show up. */
+  getClass: (id?: string) => ClassRoom | undefined;
+  getSubject: (id?: string) => Subject | undefined;
   /** Distinct content folders in use, for the "link existing folder" picker. */
   contentKeys: () => string[];
 
   // Admin mutations
   /** Returns the account plus the temporary password that was actually issued. */
   createUser: (input: CreateUserInput) => Promise<{ user: User; temporaryPassword: string }>;
-  updateUser: (id: string, patch: Partial<Pick<User, 'fullName' | 'email' | 'title' | 'role' | 'active'>>) => void;
+  updateUser: (id: string, patch: Partial<Pick<User, 'fullName' | 'email' | 'title' | 'role' | 'active'>>) => Promise<void>;
   /** Returns the temporary password to read out to the teacher. */
   resetPassword: (id: string, temporaryPassword: string) => Promise<string>;
-  setAssignments: (userId: string, pairs: Array<{ classId: string; subjectId: string }>) => void;
-  createLessons: (input: CreateLessonInput) => Lesson[];
-  updateLesson: (id: string, patch: Partial<Lesson>) => void;
-  setPublished: (id: string, published: boolean) => void;
+  /** Live mode: resolves once the server has saved it, rejects with its reason otherwise. */
+  setAssignments: (userId: string, pairs: Array<{ classId: string; subjectId: string }>) => Promise<void>;
+  createLessons: (input: CreateLessonInput) => Promise<Lesson[]>;
+  /** Edits a lesson's details, topics and objectives. Live mode: resolves once saved, rejects with the server's reason. */
+  updateLesson: (id: string, edit: LessonEdit) => Promise<void>;
+  setPublished: (id: string, published: boolean) => Promise<void>;
 
   // Used by auth
   findByIdentifier: (identifier: string) => User | undefined;
@@ -79,8 +84,8 @@ interface DirectoryValue {
   resetDemo: () => Promise<void>;
   /** True when the directory is backed by the API rather than demo data. */
   live: boolean;
-  /** Re-reads users, assignments and lessons from the API. */
-  refresh: () => Promise<void>;
+  /** Re-reads users, assignments and lessons from the API. Pass `admin: false` to skip the admin-only account list. */
+  refresh: (opts?: { admin?: boolean }) => Promise<void>;
   /** Returns a temporary password to show once, when the backend issues one. */
   lastTemporaryPassword: string | null;
 }
@@ -114,7 +119,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** Pulls the current directory from the API. Safe to call repeatedly. */
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { admin?: boolean }) => {
     if (!isLiveBackend) return;
     const [reference, lessonList] = await Promise.all([portalApi.reference(), portalApi.lessons()]);
     setAssignments(reference.assignments ?? []);
@@ -122,6 +127,10 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
     setClassesState(reference.classes ?? []);
     setSubjectsState(reference.subjects ?? []);
     // Only an admin may list accounts; a teacher simply has none to show.
+    if (opts?.admin === false) {
+      setUsers([]);
+      return;
+    }
     try {
       setUsers(await portalApi.admin.teachers());
     } catch {
@@ -163,6 +172,8 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
 
   const getUser = useCallback((id: string) => users.find((u) => u.id === id), [users]);
   const getLesson = useCallback((id: string) => lessons.find((l) => l.id === id), [lessons]);
+  const getClass = useCallback((id?: string) => (id ? classes.find((c) => c.id === id) : undefined), [classes]);
+  const getSubject = useCallback((id?: string) => (id ? subjects.find((s) => s.id === id) : undefined), [subjects]);
   const assignmentsFor = useCallback((userId: string) => assignments.filter((a) => a.userId === userId), [assignments]);
 
   /**
@@ -200,7 +211,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         });
         // The server generates the password; it is shown once and never stored.
         setLastTemporaryPassword(res.temporaryPassword);
-        setUsers((prev) => [...prev, res.user]);
+        await refresh();
         return { user: res.user, temporaryPassword: res.temporaryPassword };
       }
       const user: User = {
@@ -219,28 +230,33 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
       setCredentials((prev) => [...prev, { userId: user.id, passwordHash: hash, changedAt: new Date().toISOString() }]);
       return { user, temporaryPassword: input.temporaryPassword };
     },
-    [],
+    [refresh],
   );
 
-  const updateUser = useCallback((id: string, patch: Partial<User>) => {
-    if (isLiveBackend && typeof patch.active === 'boolean') {
-      void portalApi.admin.setActive(id, patch.active);
-    }
-    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
-  }, []);
+  const updateUser = useCallback(
+    async (id: string, patch: Partial<User>) => {
+      if (isLiveBackend) {
+        if (typeof patch.active === 'boolean') await portalApi.admin.setActive(id, patch.active);
+        await refresh();
+        return;
+      }
+      setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
+    },
+    [refresh],
+  );
 
   const resetPassword = useCallback(async (id: string, temporaryPassword: string): Promise<string> => {
     if (isLiveBackend) {
       const res = await portalApi.admin.resetPassword(id);
       setLastTemporaryPassword(res.temporaryPassword);
-      setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, mustChange: true } : u)));
+      await refresh();
       return res.temporaryPassword;
     }
     const hash = await hashPassword(temporaryPassword);
     setCredentials((prev) => prev.map((c) => (c.userId === id ? { ...c, passwordHash: hash, changedAt: new Date().toISOString() } : c)));
     setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, mustChange: true } : u)));
     return temporaryPassword;
-  }, []);
+  }, [refresh]);
 
   /**
    * Replaces a teacher's assignments wholesale.
@@ -248,21 +264,27 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
    * Removing an assignment hides those lessons but never touches teaching
    * records — history belongs to the teacher who taught it.
    */
-  const setAssignmentsFor = useCallback((userId: string, pairs: Array<{ classId: string; subjectId: string }>) => {
-    if (isLiveBackend) void portalApi.admin.setAssignments(userId, pairs);
-    const at = new Date().toISOString();
-    setAssignments((prev) => [...prev.filter((a) => a.userId !== userId), ...pairs.map((p) => ({ userId, ...p, assignedAt: at }))]);
-  }, []);
+  const setAssignmentsFor = useCallback(
+    async (userId: string, pairs: Array<{ classId: string; subjectId: string }>) => {
+      if (isLiveBackend) {
+        await portalApi.admin.setAssignments(userId, pairs);
+        await refresh();
+        return;
+      }
+      const at = new Date().toISOString();
+      setAssignments((prev) => [...prev.filter((a) => a.userId !== userId), ...pairs.map((p) => ({ userId, ...p, assignedAt: at }))]);
+    },
+    [refresh],
+  );
 
   /** Creates one lesson per selected class, all sharing a content folder when asked. */
   const createLessons = useCallback(
-    (input: CreateLessonInput): Lesson[] => {
+    async (input: CreateLessonInput): Promise<Lesson[]> => {
       if (isLiveBackend) {
         // The server derives ids and folders, so we take what it returns.
-        void portalApi.admin
-          .createLessons({ ...input, linkExistingKey: input.linkExistingKey ?? null })
-          .then((created) => setLessons((prev) => [...prev, ...created]));
-        return [];
+        const created = await portalApi.admin.createLessons({ ...input, linkExistingKey: input.linkExistingKey ?? null });
+        await refresh();
+        return created ?? [];
       }
       const created: Lesson[] = [];
       setLessons((prev) => {
@@ -295,17 +317,32 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
       });
       return created;
     },
-    [],
+    [refresh],
   );
 
-  const updateLesson = useCallback((id: string, patch: Partial<Lesson>) => {
-    setLessons((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
-  }, []);
+  const updateLesson = useCallback(
+    async (id: string, edit: LessonEdit) => {
+      if (isLiveBackend) {
+        await portalApi.admin.updateLesson(id, edit);
+        await refresh();
+        return;
+      }
+      setLessons((prev) => prev.map((l) => (l.id === id ? { ...l, ...edit } : l)));
+    },
+    [refresh],
+  );
 
-  const setPublished = useCallback((id: string, published: boolean) => {
-    if (isLiveBackend) void portalApi.admin.publish(id, published);
-    setLessons((prev) => prev.map((l) => (l.id === id ? { ...l, published } : l)));
-  }, []);
+  const setPublished = useCallback(
+    async (id: string, published: boolean) => {
+      if (isLiveBackend) {
+        await portalApi.admin.publish(id, published);
+        await refresh();
+        return;
+      }
+      setLessons((prev) => prev.map((l) => (l.id === id ? { ...l, published } : l)));
+    },
+    [refresh],
+  );
 
   const findByIdentifier = useCallback(
     (identifier: string) => {
@@ -348,6 +385,8 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
       assignmentsFor,
       getUser,
       getLesson,
+      getClass,
+      getSubject,
       contentKeys,
       createUser,
       updateUser,
@@ -375,6 +414,8 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
       assignmentsFor,
       getUser,
       getLesson,
+      getClass,
+      getSubject,
       contentKeys,
       createUser,
       updateUser,
