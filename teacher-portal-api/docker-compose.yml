@@ -1,0 +1,22 @@
+# Just the database. The API runs from your IDE or `mvn spring-boot:run`,
+# so you keep fast restarts while developing.
+services:
+  db:
+    image: postgres:16
+    container_name: tlp-db
+    environment:
+      POSTGRES_DB: teacherportal
+      POSTGRES_USER: tlp_app
+      POSTGRES_PASSWORD: devpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - tlp-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tlp_app -d teacherportal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  tlp-db-data:
