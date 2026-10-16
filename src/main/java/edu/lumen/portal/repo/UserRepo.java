@@ -97,26 +97,70 @@ public class UserRepo {
     // ---- sessions -----------------------------------------------------------
 
     /** Creates an opaque session token. Opaque, so it can be revoked server-side. */
-    public String createSession(UUID userId, int hours) {
+    public String createSession(UUID userId, int hours, String deviceId, String deviceLabel) {
         byte[] raw = new byte[32];
         RANDOM.nextBytes(raw);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
-        jdbc.update("INSERT INTO user_session (token, user_id, expires_at) VALUES (?, ?, now() + (? || ' hours')::interval)",
-                token, userId, String.valueOf(hours));
+        jdbc.update("""
+                        INSERT INTO user_session (token, user_id, expires_at, device_id, device_label)
+                        VALUES (?, ?, now() + (? || ' hours')::interval, ?, ?)
+                        """,
+                token, userId, String.valueOf(hours), deviceId, deviceLabel);
         return token;
     }
 
-    /** Resolves a token to a live user, or empty if expired, revoked or inactive. */
+    /** Resolves a token to a live user, or empty if expired, revoked or inactive. Also records the heartbeat. */
     public Optional<CurrentUser> resolveSession(String token) {
-        return jdbc.query("""
+        Optional<CurrentUser> user = jdbc.query("""
                         SELECT u.id, u.employee_id, u.full_name, u.role, u.must_change
                         FROM user_session s
                         JOIN app_user u ON u.id = s.user_id
-                        WHERE s.token = ? AND s.expires_at > now() AND u.active = TRUE
+                        WHERE s.token = ? AND s.expires_at > now() AND s.revoked_at IS NULL AND u.active = TRUE
                         """,
                 (rs, i) -> new CurrentUser(rs.getObject("id", UUID.class), rs.getString("employee_id"),
                         rs.getString("full_name"), rs.getString("role"), rs.getBoolean("must_change")),
                 token).stream().findFirst();
+        // Throttled so a busy page does not write on every request.
+        user.ifPresent(u -> jdbc.update(
+                "UPDATE user_session SET last_seen_at = now() WHERE token = ? AND last_seen_at < now() - interval '15 seconds'",
+                token));
+        return user;
+    }
+
+    /** Why a token stopped working, when it was revoked rather than simply unknown or expired. */
+    public Optional<String> revokedReason(String token) {
+        return jdbc.query("SELECT revoked_reason FROM user_session WHERE token = ? AND revoked_at IS NOT NULL",
+                (rs, i) -> rs.getString(1), token).stream().findFirst();
+    }
+
+    /**
+     * The most recently active session this account holds on a different
+     * device, if it has been heard from within `staleSeconds`. A session on
+     * the same device (a closed tab, a restarted browser) never counts.
+     */
+    public Optional<Map<String, Object>> liveSessionElsewhere(UUID userId, String deviceId, int staleSeconds) {
+        return jdbc.query("""
+                        SELECT device_label, last_seen_at
+                        FROM user_session
+                        WHERE user_id = ? AND revoked_at IS NULL AND expires_at > now()
+                          AND last_seen_at > now() - (? || ' seconds')::interval
+                          AND device_id IS DISTINCT FROM ?
+                        ORDER BY last_seen_at DESC
+                        LIMIT 1
+                        """,
+                (rs, i) -> {
+                    Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("device", rs.getString("device_label") == null ? "another device" : rs.getString("device_label"));
+                    m.put("lastSeenAt", rs.getObject("last_seen_at", java.time.OffsetDateTime.class).toInstant().toString());
+                    return m;
+                },
+                userId, String.valueOf(staleSeconds), deviceId).stream().findFirst();
+    }
+
+    /** Ends every open session for the account. Returns how many were open. */
+    public int revokeAllSessions(UUID userId, String reason) {
+        return jdbc.update("UPDATE user_session SET revoked_at = now(), revoked_reason = ? WHERE user_id = ? AND revoked_at IS NULL",
+                reason, userId);
     }
 
     public void deleteSession(String token) {
@@ -129,18 +173,22 @@ public class UserRepo {
 
     // ---- assignments --------------------------------------------------------
 
+    /** Same shape as allAssignments() — the UI matches assignments to users by userId. */
     public List<Map<String, Object>> assignmentsFor(UUID userId) {
-        return jdbc.query("SELECT class_id, subject_id FROM teacher_assignment WHERE user_id = ? ORDER BY class_id, subject_id",
-                (rs, i) -> Map.<String, Object>of("classId", rs.getString(1), "subjectId", rs.getString(2)), userId);
+        return jdbc.query("SELECT user_id, class_id, subject_id, assigned_at FROM teacher_assignment WHERE user_id = ? ORDER BY class_id, subject_id",
+                ASSIGNMENT_ROW, userId);
     }
 
     public List<Map<String, Object>> allAssignments() {
-        return jdbc.query("SELECT user_id, class_id, subject_id FROM teacher_assignment",
-                (rs, i) -> Map.<String, Object>of(
-                        "userId", rs.getObject(1, UUID.class).toString(),
-                        "classId", rs.getString(2),
-                        "subjectId", rs.getString(3)));
+        return jdbc.query("SELECT user_id, class_id, subject_id, assigned_at FROM teacher_assignment ORDER BY class_id, subject_id",
+                ASSIGNMENT_ROW);
     }
+
+    private static final RowMapper<Map<String, Object>> ASSIGNMENT_ROW = (rs, i) -> Map.<String, Object>of(
+            "userId", rs.getObject("user_id", UUID.class).toString(),
+            "classId", rs.getString("class_id"),
+            "subjectId", rs.getString("subject_id"),
+            "assignedAt", rs.getObject("assigned_at", OffsetDateTime.class).toInstant().toString());
 
     /** Replaces a teacher's assignments wholesale. Teaching records are untouched. */
     public void replaceAssignments(UUID userId, List<String[]> pairs) {

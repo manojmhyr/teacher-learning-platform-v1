@@ -3,6 +3,7 @@ package edu.lumen.portal.repo;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -111,6 +112,37 @@ public class LessonRepo {
         for (int i = 0; i < topics.size(); i++) {
             jdbc.update("INSERT INTO lesson_topic (lesson_id, position, name) VALUES (?, ?, ?)", id, i, topics.get(i));
         }
+        for (int i = 0; i < objectives.size(); i++) {
+            jdbc.update("INSERT INTO lesson_objective (lesson_id, position, text) VALUES (?, ?, ?)", id, i, objectives.get(i));
+        }
+    }
+
+    /** True when another lesson for the same class and subject already has this title. */
+    public boolean titleTaken(String classId, String subjectId, String title, String exceptLessonId) {
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM lesson WHERE class_id = ? AND subject_id = ? AND lower(title) = lower(?) AND id <> ?",
+                Integer.class, classId, subjectId, title, exceptLessonId);
+        return n != null && n > 0;
+    }
+
+    /**
+     * Edits a lesson's details and replaces its topic and objective lists.
+     *
+     * The id and content folder never change, so uploaded content stays where
+     * it is. Teaching records keep the topic names they were saved with — they
+     * are copied, not linked — so renaming or removing a topic leaves history
+     * intact.
+     */
+    @Transactional
+    public void update(String id, String title, String description, String chapter, int durationMin, String difficulty,
+                       List<String> topics, List<String> objectives) {
+        jdbc.update("UPDATE lesson SET title = ?, description = ?, chapter = ?, duration_min = ?, difficulty = ? WHERE id = ?",
+                title, description, chapter, durationMin, difficulty, id);
+        jdbc.update("DELETE FROM lesson_topic WHERE lesson_id = ?", id);
+        for (int i = 0; i < topics.size(); i++) {
+            jdbc.update("INSERT INTO lesson_topic (lesson_id, position, name) VALUES (?, ?, ?)", id, i, topics.get(i));
+        }
+        jdbc.update("DELETE FROM lesson_objective WHERE lesson_id = ?", id);
         for (int i = 0; i < objectives.size(); i++) {
             jdbc.update("INSERT INTO lesson_objective (lesson_id, position, text) VALUES (?, ?, ?)", id, i, objectives.get(i));
         }

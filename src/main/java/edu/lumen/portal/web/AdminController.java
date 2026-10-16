@@ -216,6 +216,63 @@ public class AdminController {
     public record PublishRequest(boolean published) {
     }
 
+    public record UpdateLessonRequest(String title, String description, String chapter, Integer durationMin,
+                                      String difficulty, List<String> topics, List<String> objectives) {
+    }
+
+    private static final List<String> DIFFICULTIES = List.of("Beginner", "Intermediate", "Advanced");
+
+    /** Trims, drops blanks and case-insensitive duplicates, keeps order. */
+    private static List<String> cleanList(List<String> items, int maxLength) {
+        if (items == null) return List.of();
+        Map<String, String> seen = new java.util.LinkedHashMap<>();
+        for (String item : items) {
+            if (item == null) continue;
+            String t = item.trim();
+            if (t.isEmpty()) continue;
+            if (t.length() > maxLength) t = t.substring(0, maxLength);
+            seen.putIfAbsent(t.toLowerCase(), t);
+        }
+        return List.copyOf(seen.values());
+    }
+
+    /**
+     * Edits a lesson after creation — title, details, coverage topics and
+     * objectives. Class, subject, id and content folder stay fixed, so
+     * uploaded content and teaching history are untouched.
+     */
+    @PostMapping("/lessons/{id}")
+    public Map<String, Object> updateLesson(@AuthenticationPrincipal CurrentUser me,
+                                            @PathVariable String id,
+                                            @RequestBody UpdateLessonRequest body,
+                                            HttpServletRequest http) {
+        Map<String, Object> lesson = lessons.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+
+        String title = body.title() == null ? "" : body.title().trim();
+        if (title.length() < 3 || title.length() > 200) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a lesson title of 3 to 200 characters.");
+        }
+        if (lessons.titleTaken((String) lesson.get("classId"), (String) lesson.get("subjectId"), title, id)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Another lesson for " + lesson.get("classId") + " already has the title \"" + title + "\".");
+        }
+        String chapter = body.chapter() == null ? "" : body.chapter().trim();
+        if (chapter.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a chapter.");
+        int duration = body.durationMin() == null ? 0 : body.durationMin();
+        if (duration < 1 || duration > 240) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a duration between 1 and 240 minutes.");
+        }
+        String difficulty = DIFFICULTIES.contains(body.difficulty()) ? body.difficulty() : "Beginner";
+        List<String> topics = cleanList(body.topics(), 160);
+        if (topics.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add at least one coverage topic.");
+        List<String> objectives = cleanList(body.objectives(), 300);
+
+        lessons.update(id, title, body.description() == null ? "" : body.description().trim(), chapter, duration,
+                difficulty, topics, objectives);
+        ref.audit(me.id(), "LESSON_UPDATED", id + " — " + topics.size() + " topics", AuthController.ip(http));
+        return lessons.findById(id).orElseThrow();
+    }
+
     @PostMapping("/lessons/{id}/publish")
     public ResponseEntity<Void> publish(@AuthenticationPrincipal CurrentUser me,
                                         @PathVariable String id,

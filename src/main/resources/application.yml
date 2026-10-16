@@ -1,5 +1,9 @@
 server:
   port: 8080
+  error:
+    # The reasons thrown by the controllers are written for end users; send them.
+    include-message: always
+    include-stacktrace: never
 
 spring:
   application:

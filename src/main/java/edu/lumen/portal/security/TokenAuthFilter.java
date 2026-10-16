@@ -25,6 +25,11 @@ import java.util.Optional;
 @Component
 public class TokenAuthFilter extends OncePerRequestFilter {
 
+    /** Set when the token was revoked on purpose, so the 401 can say why. */
+    public static final String REVOKED_REASON = "portal.revokedReason";
+    /** Set when an Android browser presents a token: only the app may use one there. */
+    public static final String APP_REQUIRED = "portal.appRequired";
+
     private final UserRepo users;
 
     public TokenAuthFilter(UserRepo users) {
@@ -36,7 +41,10 @@ public class TokenAuthFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         String header = request.getHeader("Authorization");
-        if (header != null && header.startsWith("Bearer ")) {
+        if (ClientPolicy.isAndroidBrowser(request.getHeader("User-Agent"))) {
+            // No authentication at all — every protected call answers 401 APP_REQUIRED.
+            request.setAttribute(APP_REQUIRED, Boolean.TRUE);
+        } else if (header != null && header.startsWith("Bearer ")) {
             String token = header.substring(7).trim();
             Optional<CurrentUser> user = users.resolveSession(token);
             if (user.isPresent()) {
@@ -44,6 +52,8 @@ public class TokenAuthFilter extends OncePerRequestFilter {
                 var auth = new UsernamePasswordAuthenticationToken(
                         cu, token, List.of(new SimpleGrantedAuthority("ROLE_" + cu.role())));
                 SecurityContextHolder.getContext().setAuthentication(auth);
+            } else {
+                users.revokedReason(token).ifPresent(reason -> request.setAttribute(REVOKED_REASON, reason));
             }
         }
         chain.doFilter(request, response);

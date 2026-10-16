@@ -2,6 +2,7 @@ package edu.lumen.portal.web;
 
 import edu.lumen.portal.repo.RefRepo;
 import edu.lumen.portal.repo.UserRepo;
+import edu.lumen.portal.security.ClientPolicy;
 import edu.lumen.portal.security.CurrentUser;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.NotBlank;
@@ -13,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,8 +35,15 @@ public class AuthController {
         this.encoder = encoder;
     }
 
-    public record LoginRequest(@NotBlank String identifier, @NotBlank String password) {
+    /**
+     * `deviceId` is a random id the browser keeps for itself; `force` signs
+     * out the account's other device instead of refusing.
+     */
+    public record LoginRequest(@NotBlank String identifier, @NotBlank String password, String deviceId, Boolean force) {
     }
+
+    /** A session not heard from for this long counts as closed (the UI heartbeats at least once a minute). */
+    private static final int STALE_SECONDS = 180;
 
     public record ChangePasswordRequest(@NotBlank String current, @NotBlank String next) {
     }
@@ -47,7 +56,13 @@ public class AuthController {
      * enumerator.
      */
     @PostMapping("/auth/login")
-    public Map<String, Object> login(@RequestBody LoginRequest body, HttpServletRequest http) {
+    public ResponseEntity<Map<String, Object>> login(@RequestBody LoginRequest body, HttpServletRequest http) {
+        if (ClientPolicy.isAndroidBrowser(http.getHeader("User-Agent"))) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "status", 403,
+                    "code", "APP_REQUIRED",
+                    "message", "On Android, Teacher Portal works only in its app. Open the Teacher Portal app to sign in."));
+        }
         Optional<Map<String, Object>> found = users.findByIdentifier(body.identifier());
 
         // Hash a dummy value when the user does not exist, so a missing account
@@ -67,14 +82,38 @@ public class AuthController {
         }
 
         UUID id = UUID.fromString((String) user.get("id"));
-        String token = users.createSession(id, sessionHours);
-        users.markLogin(id);
-        ref.audit(id, "LOGIN", "Signed in", ip(http));
+        String deviceId = cleanDeviceId(body.deviceId());
+        String deviceLabel = deviceLabel(http.getHeader("User-Agent"));
 
-        return Map.of(
+        // One device at a time. Checked only after the password is verified, so
+        // this answer reveals nothing to someone who does not know it.
+        Optional<Map<String, Object>> elsewhere = users.liveSessionElsewhere(id, deviceId, STALE_SECONDS);
+        boolean force = Boolean.TRUE.equals(body.force());
+        if (elsewhere.isPresent() && !force) {
+            ref.audit(id, "LOGIN_BLOCKED", "Already signed in on " + elsewhere.get().get("device"), ip(http));
+            Map<String, Object> conflict = new LinkedHashMap<>();
+            conflict.put("status", 409);
+            conflict.put("code", "SESSION_ACTIVE");
+            conflict.put("message", "This account is already signed in on " + elsewhere.get().get("device")
+                    + ". Sign out there first, or sign it out from here.");
+            conflict.putAll(elsewhere.get());
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(conflict);
+        }
+
+        // Whatever else was open — another device, or a tab this browser closed — ends now.
+        users.revokeAllSessions(id, "REPLACED");
+        if (elsewhere.isPresent()) {
+            ref.audit(id, "SESSION_REPLACED", "Signed out " + elsewhere.get().get("device") + " to sign in on " + deviceLabel, ip(http));
+        }
+
+        String token = users.createSession(id, sessionHours, deviceId, deviceLabel);
+        users.markLogin(id);
+        ref.audit(id, "LOGIN", "Signed in on " + deviceLabel, ip(http));
+
+        return ResponseEntity.ok(Map.of(
                 "accessToken", token,
                 "expiresIn", sessionHours * 3600,
-                "user", user);
+                "user", user));
     }
 
     @PostMapping("/auth/logout")
@@ -114,6 +153,32 @@ public class AuthController {
     @GetMapping("/api/health")
     public Map<String, String> health() {
         return Map.of("status", "ok");
+    }
+
+    private static String cleanDeviceId(String raw) {
+        if (raw == null) return null;
+        String id = raw.trim();
+        return id.matches("[A-Za-z0-9-]{8,64}") ? id : null;
+    }
+
+    /** "Chrome on Windows" — enough for a person to recognise their own device. */
+    static String deviceLabel(String userAgent) {
+        if (userAgent == null || userAgent.isBlank()) return "another device";
+        String ua = userAgent;
+        if (ClientPolicy.isApp(ua)) return ua.contains("Android") ? "the Teacher Portal app on Android" : "the Teacher Portal app";
+        String browser = ua.contains("Edg/") ? "Edge"
+                : ua.contains("OPR/") ? "Opera"
+                : ua.contains("Firefox/") ? "Firefox"
+                : ua.contains("Chrome/") ? "Chrome"
+                : ua.contains("Safari/") ? "Safari"
+                : "a browser";
+        String os = ua.contains("Windows") ? "Windows"
+                : ua.contains("Android") ? "Android"
+                : ua.contains("iPhone") || ua.contains("iPad") ? "iOS"
+                : ua.contains("Mac OS X") ? "macOS"
+                : ua.contains("Linux") ? "Linux"
+                : "an unknown device";
+        return browser + " on " + os;
     }
 
     static String ip(HttpServletRequest request) {
